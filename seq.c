@@ -8,7 +8,6 @@ struct AlignJob{
 	int blocksize;
 	int work;
 	int startCoordA;
-	int rest;
 	int lengthB;
 	char *sequence1,*sequence2;
 	struct list_head *results;
@@ -53,6 +52,35 @@ void sequenceVerarbeitung(char *s) {
     	*head = '\0';
 }
 
+char* importSequence(char *argv){
+	FILE *sequenceFile;
+	char *filename = argv;
+	sequenceFile = fopen(filename,"r");
+
+		if (sequenceFile){
+			printf("Datei wurde eingelesen\n");
+			// Dateiende finden
+			fseek(sequenceFile ,0 , SEEK_END);
+			// Größe der Datei
+			int size = ftell(sequenceFile);
+			printf("Die Datei ist %i Zeichen groß\n",size);
+			// LinePointer zurücksetzten
+			rewind(sequenceFile);
+			
+			char *sequence = malloc(size*sizeof(char));
+			// Blockweise Dateiinhalt einlesen
+			fread(sequence, sizeof(char), size, sequenceFile);
+			printf("Dateiinhalt wurde eingelesen\n");
+			fclose(sequenceFile);
+
+			sequence= (strstr(sequence,"\n")+1); // Erste Zeile überspringen
+			sequenceVerarbeitung(sequence); // Trennzeichen und Repeats löschen
+			return sequence;	
+		}
+
+	printf("Fehler beim Einlesen\n");
+	return NULL;
+}
 
 int editDistanceDynamic(char *stringA, char *stringB){
 
@@ -86,7 +114,6 @@ int editDistanceDynamic(char *stringA, char *stringB){
 
 		}
 	}
-
 	// Ausgabe des Edit-Scores
 	return editMatrix[lenA][lenB];
 }
@@ -113,29 +140,29 @@ void *scoreCalculatorThread(void *arg){
 		for (j = 0; j < workB; ++j){
 			char *subB = malloc(blocksize);
 			memcpy(subB, stringB+(blocksize*j),blocksize);
-			
 			// Result Element für die Speicherung der Ergebnisse mit Koordinaten
 			struct Result *res = malloc(sizeof(struct Result));
 			res->score= editDistanceDynamic(subA,subB);
 			res->startA= job->startCoordA + i*blocksize;
 			res->startB= j*blocksize;
-			if (res->score > 30){
+			// if (res->score > 50){
+				// printf("S1:|%s|\nS2:|%s|\n\n",subA,subB );
 				list_add(&(res->head),resultList);
-			}
+			// }
 		}
 		int restB;
 		if (( restB = lengthB%blocksize)  > 0){
+			// Reststring kopieren
 			char *subB = malloc(restB);
 			memcpy(subB, stringB+(blocksize*(workB)),restB);
-
+			// Ergebnis erstellen und berechnen
 			struct Result *res = malloc(sizeof(struct Result));
 			res->score= editDistanceDynamic(subA,subB);
 			res->startA= job->startCoordA + i*blocksize;
 			res->startB= workB*blocksize;
-			// printf("%i %i %i %s %i\n",res->startA,res->startB ,restB,subB,workB);
-			if (res->score > 30){
+			// if (res->score > 50){
 				list_add(&(res->head),resultList);
-			}
+			// }
 
 		}
 	}
@@ -145,53 +172,32 @@ void *scoreCalculatorThread(void *arg){
 }
 
 
-char* importSequence(char *argv){
-	FILE *sequenceFile;
-	char *filename = argv;
-	sequenceFile = fopen(filename,"r");
-
-		if (sequenceFile){
-			printf("Datei wurde eingelesen\n");
-			// Dateiende finden
-			fseek(sequenceFile ,0 , SEEK_END);
-			// Größe der Datei
-			int size = ftell(sequenceFile);
-			printf("Die Datei ist %i Zeichen groß\n",size);
-			// LinePointer zurücksetzten
-			rewind(sequenceFile);
-			
-			char *sequence = malloc(size*sizeof(char));
-			// Blockweise Dateiinhalt einlesen
-			fread(sequence, sizeof(char), size, sequenceFile);
-			printf("Dateiinhalt wurde eingelesen\n");
-			fclose(sequenceFile);
-
-			sequence= (strstr(sequence,"\n")+1); // Erste Zeile überspringen
-			sequenceVerarbeitung(sequence); // Trennzeichen und Repeats löschen
-			return sequence;	
-		}
-
-	printf("Fehler beim Einlesen\n");
-	return NULL;
-}
-
-
-
 int main (int argc, char *argv[]){
-	int blocksize = 25;
-	int threadNumber  = 4;
+	if (argv[1]==NULL || argv[2]==NULL){
+		printf("Keine Eingabesequenzen, Benutzung: Datei1 Datei2 Threadanzahl\n");
+		return -1;
+	}
+	int BLOCKSIZE = 50;
+	int threadNumber;
+	if (argv[3]){
+		threadNumber  = atoi(argv[3]);
+	} else {
+		threadNumber  = 1;
+		printf("Keine Threadanzahl angegeben. Standardmäßg auf 1 gesetzt.\n");
+	}
+	// Array für alle Thread-IDs
 	pthread_t threads[threadNumber];
-
-	char *seqA = importSequence(argv[1]);
-	char *seqB = importSequence(argv[2]);
+	// Sequenzen Importieren
+	// char *seqA = importSequence(argv[1]);
+	// char *seqB = importSequence(argv[2]);
+	char *seqA = "CCGTCCGTTAATTCCTCTTGCATTCATATCGCGTATTTTTGTCTCTTTACCCGCTTACTTGGATAAGGATGACATAGCTTCTTACCGGAGCGCCTCCGTAAAA";
+	char *seqB = "CTGGCAACCGGGAGGTGGGAATCCGTCACATATGAGAAGGTATTTGCCCGATAATCAATACTCCAGGCATCTAACTTTTCCCACTGCCTTAAGCCGGCTT";
 	int lengthA = strlen(seqA);
 	int lengthB = strlen(seqB);
 
-	int blockCountSeqA = lengthA/blocksize;
-	int restA = lengthA%blocksize;
-	int blockCountSeqB = strlen(seqB)/blocksize;
-	int restB = lengthB%blocksize;
-	printf("SequenzA:  %i Blöcke, SequenzB: %i Blöcke, RestA %i ,RestB %i \n",blockCountSeqA,blockCountSeqB,restA,restB);
+	int blockCountSeqA = lengthA/BLOCKSIZE;
+	int restA = lengthA%BLOCKSIZE;
+	int blockCountSeqB = strlen(seqB)/BLOCKSIZE;
 
 	if (blockCountSeqA>=blockCountSeqB){
 		int workPerThread = blockCountSeqA/threadNumber;
@@ -199,35 +205,44 @@ int main (int argc, char *argv[]){
 		int i;
 		printf("Threads werden erstellt:\n");
 		for (i = 0; i < threadNumber; ++i){
-			char *seqAforThread;
-			char *seqBforThread;
+			char *cutoutA;
+			char *cutoutB;
 			struct AlignJob *job = malloc(sizeof(struct AlignJob));
+			int arbeitsbereich;
 
-			printf("Thread Nr: %i wird erstellt\n",i);
-			if (i == threadNumber-1){
-				// Der letzte Thread berechnet den Modulo Teil mit
-				workPerThread += blockCountSeqA % threadNumber;
-				if (workPerThread == 0) workPerThread = 1;
-				seqAforThread = malloc(sizeof(char)*(workPerThread*blocksize+restA));
-				memcpy( seqAforThread, seqA+(i * blocksize * workPerThread),blocksize*workPerThread+restA);
-				seqAforThread[blocksize*workPerThread+restA] = '\0';
-				job->rest = restA;	
-			}else {
+			// Ausschnitt der Sequenz A
+			if (i < threadNumber-1){
 				// Normale Aufteilung der Sequenz A für den Thread
-				seqAforThread = malloc(sizeof(char)*workPerThread*blocksize);
-				memcpy( seqAforThread, seqA+(i * blocksize * workPerThread),blocksize*workPerThread);
-				seqAforThread[blocksize*workPerThread] = '\0';
+				arbeitsbereich = workPerThread * BLOCKSIZE; 
+				cutoutA = malloc(arbeitsbereich);
+				memcpy( cutoutA, seqA+(i * arbeitsbereich), arbeitsbereich);
+			}else {
+				// Der letzte Thread berechnet den Modulo Teil mit
+				if (restA >0 ) {
+					workPerThread += 1;
+					arbeitsbereich = (workPerThread-1) * BLOCKSIZE + restA;
+					cutoutA = malloc(arbeitsbereich);
+					memcpy( cutoutA, seqA+(i * BLOCKSIZE * workPerThread), arbeitsbereich);
+				} else {
+					arbeitsbereich = workPerThread * BLOCKSIZE;
+					cutoutA = malloc(arbeitsbereich);
+					memcpy( cutoutA, seqA+(i * BLOCKSIZE * workPerThread), arbeitsbereich);
+					
+				}
+
 			}
-			// Kopieren von SequenzB
-			seqBforThread = malloc(lengthB);
-			memcpy( seqBforThread, seqB,lengthB);
+			printf("%i %i %i\n",arbeitsbereich, workPerThread, blockCountSeqA );
+			// Ausschnitt der Sequenz B
+			cutoutB = malloc(lengthB);
+			memcpy( cutoutB, seqB,lengthB);
+
 			// Job erstellen
-			job->sequence1 = seqAforThread;
-			job->sequence2 = seqBforThread;
-			job->blocksize= blocksize;
+			job->sequence1 = cutoutA;
+			job->sequence2 = cutoutB;
+			job->blocksize= BLOCKSIZE;
 			job->lengthB = lengthB;
 			job->work = workPerThread;
-			job->startCoordA = i * blocksize * workPerThread; 
+			job->startCoordA = i * BLOCKSIZE * workPerThread; 
 			pthread_create(&threads[i], NULL, scoreCalculatorThread, job);
 		}
 
