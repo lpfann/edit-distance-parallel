@@ -4,6 +4,7 @@
 #include <pthread.h>
 #include "dll.h"
 
+
 struct AlignJob{
 	int blocksize;
 	int work;
@@ -123,51 +124,37 @@ void *scoreCalculatorThread(void *arg){
 	int blocksize = job->blocksize;
 	char *stringA = job->sequence1;
 	char *stringB = job->sequence2;
-	int work = job->work;
 	int lengthB = job->lengthB;
 	struct list_head *resultList = malloc(sizeof(struct list_head));
 	list_init(resultList);
 	job->results = resultList;
+	int verschiebungenA = strlen(stringA)-blocksize;
 
+	// printf("%s\n%s\n",stringA,stringB );
 	// Äußere Schleife geht StringA blockweise durch
 	int i;
-	for (i = 0; i < work; ++i){
+	for (i = 0; i < verschiebungenA; ++i){
 		char *subA = malloc(blocksize);
-		memcpy(subA, stringA+(blocksize*i),blocksize);
+		memcpy(subA, stringA+i,blocksize);
 		// Durchgehen des zweiten Strings
 		int j;
-		int workB = lengthB/blocksize;
-		for (j = 0; j < workB; ++j){
+		int verschiebungenB = lengthB - blocksize;
+		for (j = 0; j < verschiebungenB; ++j){
 			char *subB = malloc(blocksize);
-			memcpy(subB, stringB+(blocksize*j),blocksize);
+			memcpy(subB, stringB+j,blocksize);
 			// Result Element für die Speicherung der Ergebnisse mit Koordinaten
 			struct Result *res = malloc(sizeof(struct Result));
 			res->score= editDistanceDynamic(subA,subB);
-			res->startA= job->startCoordA + i*blocksize;
-			res->startB= j*blocksize;
-			// if (res->score > 50){
+			res->startA= job->startCoordA + i;
+			res->startB= j;
+			if (res->score > 70){
 				// printf("S1:|%s|\nS2:|%s|\n\n",subA,subB );
 				list_add(&(res->head),resultList);
-			// }
-		}
-		int restB;
-		if (( restB = lengthB%blocksize)  > 0){
-			// Reststring kopieren
-			char *subB = malloc(restB);
-			memcpy(subB, stringB+(blocksize*(workB)),restB);
-			// Ergebnis erstellen und berechnen
-			struct Result *res = malloc(sizeof(struct Result));
-			res->score= editDistanceDynamic(subA,subB);
-			res->startA= job->startCoordA + i*blocksize;
-			res->startB= workB*blocksize;
-			// if (res->score > 50){
-				list_add(&(res->head),resultList);
-			// }
-
+			}
 		}
 	}
 
-	print_results(resultList);
+	// print_results(resultList);
 	return NULL;
 }
 
@@ -185,55 +172,47 @@ int main (int argc, char *argv[]){
 		threadNumber  = 1;
 		printf("Keine Threadanzahl angegeben. Standardmäßg auf 1 gesetzt.\n");
 	}
+
 	// Array für alle Thread-IDs
 	pthread_t threads[threadNumber];
 	// Sequenzen Importieren
-	// char *seqA = importSequence(argv[1]);
-	// char *seqB = importSequence(argv[2]);
-	char *seqA = "CCGTCCGTTAATTCCTCTTGCATTCATATCGCGTATTTTTGTCTCTTTACCCGCTTACTTGGATAAGGATGACATAGCTTCTTACCGGAGCGCCTCCGTAAAA";
-	char *seqB = "CTGGCAACCGGGAGGTGGGAATCCGTCACATATGAGAAGGTATTTGCCCGATAATCAATACTCCAGGCATCTAACTTTTCCCACTGCCTTAAGCCGGCTT";
+	char *seqA = importSequence(argv[1]);
+	char *seqB = importSequence(argv[2]);
+	// char *seqA = "CCGTCCGTTAATTCCTCTTGCATTCATATCGCGTATTTTTGTCTCTTTACCCGCTTACTTGGATAAGGATGACATAGCTTCTTACCGGAGCGCCTCCGTAAAATTGC";
+	// char *seqB = "CTGGCAACCGGGAGGTGGGAATCCGTCACATATGAGAAGGTATTTGCCCGATAATCAATACTCCAGGCATCTAACTTTTCCCACTGCCTTAAGCCGGCTT";
 	int lengthA = strlen(seqA);
 	int lengthB = strlen(seqB);
 
-	int blockCountSeqA = lengthA/BLOCKSIZE;
-	int restA = lengthA%BLOCKSIZE;
-	int blockCountSeqB = strlen(seqB)/BLOCKSIZE;
-
-	if (blockCountSeqA>=blockCountSeqB){
-		int workPerThread = blockCountSeqA/threadNumber;
-		if (workPerThread == 0) threadNumber=1; // Falls Sequenzen zu kurz für Multithreading sind
+	if (lengthA>=lengthB){
+		int workPerThread = lengthA/threadNumber;
+		if (workPerThread< BLOCKSIZE){
+			printf("Zu viele Threads für Sequenzlänge eingestellt. Passende Anzahl wird ermittelt.\n");
+			while(workPerThread < BLOCKSIZE){
+				threadNumber -=1;
+				workPerThread = lengthA/threadNumber;
+			}
+		}
+		int rest = lengthA % threadNumber;
 		int i;
-		printf("Threads werden erstellt:\n");
 		for (i = 0; i < threadNumber; ++i){
 			char *cutoutA;
 			char *cutoutB;
 			struct AlignJob *job = malloc(sizeof(struct AlignJob));
-			int arbeitsbereich;
-
-			// Ausschnitt der Sequenz A
-			if (i < threadNumber-1){
-				// Normale Aufteilung der Sequenz A für den Thread
-				arbeitsbereich = workPerThread * BLOCKSIZE; 
-				cutoutA = malloc(arbeitsbereich);
-				memcpy( cutoutA, seqA+(i * arbeitsbereich), arbeitsbereich);
-			}else {
-				// Der letzte Thread berechnet den Modulo Teil mit
-				if (restA >0 ) {
-					workPerThread += 1;
-					arbeitsbereich = (workPerThread-1) * BLOCKSIZE + restA;
-					cutoutA = malloc(arbeitsbereich);
-					memcpy( cutoutA, seqA+(i * BLOCKSIZE * workPerThread), arbeitsbereich);
-				} else {
-					arbeitsbereich = workPerThread * BLOCKSIZE;
-					cutoutA = malloc(arbeitsbereich);
-					memcpy( cutoutA, seqA+(i * BLOCKSIZE * workPerThread), arbeitsbereich);
-					
+			int arbeitsbereich = workPerThread + BLOCKSIZE;
+			// Normale Aufteilung der Sequenz A für den Thread
+			cutoutA = malloc(arbeitsbereich);
+			memcpy( cutoutA, seqA+(i * workPerThread), arbeitsbereich);
+			
+			if (i == threadNumber-1){
+				arbeitsbereich = workPerThread;
+				if (rest > 0){
+					cutoutA = malloc(arbeitsbereich + rest);
+					memcpy( cutoutA, seqA+(i * workPerThread), arbeitsbereich + rest);
 				}
-
 			}
-			printf("%i %i %i\n",arbeitsbereich, workPerThread, blockCountSeqA );
+			// printf("%i %i %i %i\n",workPerThread, threadNumber,rest, arbeitsbereich );
 			// Ausschnitt der Sequenz B
-			cutoutB = malloc(lengthB);
+			cutoutB = malloc(lengthB+1);
 			memcpy( cutoutB, seqB,lengthB);
 
 			// Job erstellen
@@ -242,22 +221,26 @@ int main (int argc, char *argv[]){
 			job->blocksize= BLOCKSIZE;
 			job->lengthB = lengthB;
 			job->work = workPerThread;
-			job->startCoordA = i * BLOCKSIZE * workPerThread; 
+			job->startCoordA = i * workPerThread; 
 			pthread_create(&threads[i], NULL, scoreCalculatorThread, job);
 		}
 
+		// pthread_mutex_t lock = PTHREAD_MUTEX_INITIALIZER;
+		// pthread_cond_t ergebnisseBereit = PTHREAD_COND_INITIALIZER;
+
+		// pthread_mutex_lock(&lock);
+		// while(1){
+		// 	pthread_cond_wait(&ergebnisseBereit,&lock);
+		// }
+		// pthread_mutex_unlock(&lock);
+
+
 		for (i = 0; i < threadNumber; ++i){
 			pthread_join(threads[i], NULL);
-		}	
+		}
+			
 	} else {
-		printf("Die erste Sequenz muss die längere sein!\n" );
+		printf("Die erste Sequenz muss die Längere sein!\n" );
 	}
-
-	// char *sequence = importSequence(argv);
-	// if (sequence){
-	// 	// printf("%s",sequence);
-	// }
-
-
 return 0;
 }
