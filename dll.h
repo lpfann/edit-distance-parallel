@@ -55,12 +55,9 @@ void list_move_tail(struct list_head *entry, struct list_head *head){
 
 /* tests whether a list is empty */
 int list_empty(struct list_head *head){
-	if (head->prev == head && head->next == head)
-	{
+	if (head->prev == head && head->next == head){
 	return 1;
-	printf("%s\n", "Liste ist leer" );
 	} else {
-	printf("%s\n", "Liste ist nicht leer" );
 	return 0;
 	}
 };

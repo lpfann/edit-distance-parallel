@@ -5,11 +5,17 @@
 #include "dll.h"
 
 
+pthread_mutex_t lock = PTHREAD_MUTEX_INITIALIZER;
+pthread_cond_t ergebnisseBereit = PTHREAD_COND_INITIALIZER;
+struct list_head *globalResults;
+int *finished;
+
 struct AlignJob{
 	int blocksize;
 	int work;
 	int startCoordA;
 	int lengthB;
+	int id;
 	char *sequence1,*sequence2;
 	struct list_head *results;
 };
@@ -19,24 +25,51 @@ struct Result{
 	int startB;
 	int score;
 };
+struct GlobalResult{
+	struct list_head head;
+	struct list_head *content;
+};
 
 void print_results(struct list_head *list){
-	
 	struct list_head *start = list;
 	struct Result *result = (struct Result *)list;
 	struct list_head *temp = list->next;	
-	
-	while (temp != start)
-	{
+	while (temp != start){
 		result = (struct Result *)temp;
 		printf("%i %i %i\n\r",result->startA,result->startB,result->score);
 		temp = temp->next;
 	}
+};
+void print_max_Element(struct list_head *list){
+	struct list_head *element = list->next;
+	struct GlobalResult *globalResult = (struct GlobalResult *)element;
+
+	// ResultListe beziehen
+	struct list_head *resultListe = globalResult->content;
+	struct list_head *temp = resultListe->next;	
+	
+	// Maximum finden
+	int maxScore = 0;
+	struct Result *result;
+	struct Result *maximumElement;
+	while (temp != resultListe){
+		result = (struct Result *)temp;
+		if (result->score >= maxScore){
+			maxScore = result->score;
+			maximumElement = result;
+		}
+		temp = temp->next;
+	}
+	printf("%i %i %i\n",maximumElement->startA,maximumElement->startB,maximumElement->score);
+
+	// Berechnetes Element aus der globalenListe löschen
+	list_del(element);
 
 };
 
+
+
 void sequenceVerarbeitung(char *s) {
-		
     	// Zweiten temporären Zeiger
     	char *head = s;
     	while(*s != '\0') {
@@ -152,8 +185,27 @@ void *scoreCalculatorThread(void *arg){
 				list_add(&(res->head),resultList);
 			}
 		}
+		if (list_empty(resultList) == 0){
+			struct GlobalResult *gresult = malloc(sizeof(struct GlobalResult));
+			gresult->content = resultList;
+
+			pthread_mutex_lock(&lock);
+
+				list_add((struct list_head *)gresult,globalResults);
+				pthread_cond_signal(&ergebnisseBereit);
+
+			pthread_mutex_unlock(&lock);
+			resultList = malloc(sizeof(struct list_head));	
+			list_init(resultList);
+		
+		}
 	}
 
+	pthread_mutex_lock(&lock);
+		finished[job->id]= 1;
+		pthread_cond_signal(&ergebnisseBereit);
+
+	pthread_mutex_unlock(&lock);
 	// print_results(resultList);
 	return NULL;
 }
@@ -175,6 +227,9 @@ int main (int argc, char *argv[]){
 
 	// Array für alle Thread-IDs
 	pthread_t threads[threadNumber];
+	globalResults = malloc(sizeof(struct list_head));
+	list_init(globalResults);
+
 	// Sequenzen Importieren
 	char *seqA = importSequence(argv[1]);
 	char *seqB = importSequence(argv[2]);
@@ -193,7 +248,9 @@ int main (int argc, char *argv[]){
 			}
 		}
 		int rest = lengthA % threadNumber;
+		finished = malloc(sizeof(int)*threadNumber);
 		int i;
+		printf("--- Berechnung mit %i Threads startet ---\n",threadNumber );
 		for (i = 0; i < threadNumber; ++i){
 			char *cutoutA;
 			char *cutoutB;
@@ -221,24 +278,41 @@ int main (int argc, char *argv[]){
 			job->blocksize= BLOCKSIZE;
 			job->lengthB = lengthB;
 			job->work = workPerThread;
-			job->startCoordA = i * workPerThread; 
+			job->startCoordA = i * workPerThread;
+			job->id = i;
+			pthread_mutex_lock(&lock);
+			finished[i]=0; 
+			pthread_mutex_unlock(&lock);
 			pthread_create(&threads[i], NULL, scoreCalculatorThread, job);
 		}
 
-		// pthread_mutex_t lock = PTHREAD_MUTEX_INITIALIZER;
-		// pthread_cond_t ergebnisseBereit = PTHREAD_COND_INITIALIZER;
+		// Verarbeitungsblock
+		pthread_mutex_lock(&lock);
+		int sum =0;
+		while(list_empty(globalResults)){
+			pthread_cond_wait(&ergebnisseBereit,&lock);
 
-		// pthread_mutex_lock(&lock);
-		// while(1){
-		// 	pthread_cond_wait(&ergebnisseBereit,&lock);
-		// }
-		// pthread_mutex_unlock(&lock);
+			// Checken ob alle Threads fertig sind
+			sum = 0;
+			for (i = 0; i < threadNumber; ++i){
+				sum += finished[i];
+			}
+			// Ergebnisliste abarbeiten
+			while(list_empty(globalResults) == 0){
+				print_max_Element(globalResults);
+			}
+			// Schleife verlassen wenn alles erledigt wurde
+			if (sum == threadNumber){
+				break;	
+			}
+		}
+		pthread_mutex_unlock(&lock);
 
-
+		// Threads joinen
 		for (i = 0; i < threadNumber; ++i){
 			pthread_join(threads[i], NULL);
 		}
-			
+
 	} else {
 		printf("Die erste Sequenz muss die Längere sein!\n" );
 	}
