@@ -6,6 +6,7 @@
 
 
 pthread_mutex_t lock = PTHREAD_MUTEX_INITIALIZER;
+pthread_mutex_t finishedlock = PTHREAD_MUTEX_INITIALIZER;
 pthread_cond_t ergebnisseBereit = PTHREAD_COND_INITIALIZER;
 struct list_head *globalResults;
 int *finished;
@@ -50,20 +51,23 @@ void print_max_Element(struct list_head *list){
 	
 	// Maximum finden
 	int maxScore = 0;
+	int startA,startB;
 	struct Result *result;
-	struct Result *maximumElement;
+
 	while (temp != resultListe){
 		result = (struct Result *)temp;
 		if (result->score >= maxScore){
 			maxScore = result->score;
-			maximumElement = result;
+			startA = result->startA;
+			startB = result->startB; 
 		}
 		temp = temp->next;
 	}
-	printf("%i %i %i\n",maximumElement->startA,maximumElement->startB,maximumElement->score);
+	printf("%i %i %i\n",startA,startB,maxScore);
 
 	// Berechnetes Element aus der globalenListe löschen
 	list_del(element);
+
 
 };
 
@@ -122,6 +126,7 @@ int editDistanceDynamic(char *stringA, char *stringB){
 	int lenB = strlen(stringB);
 	int editMatrix[lenA+1][lenB+1];
 	int i,j;
+	int max = 0;
 	for ( i = 0; i <= lenA; ++i){
 		for ( j = 0; j <= lenB; ++j){
 			// Erste Zeile und Spalte mit 0 Initalisieren
@@ -146,10 +151,15 @@ int editDistanceDynamic(char *stringA, char *stringB){
 				editMatrix[i][j] = 0;
 			}
 
+			Maximal Score für lokales Alignment suchen
+			if (editMatrix[i][j]>= max){
+				max = editMatrix[i][j]; 
+			}
 		}
 	}
+
 	// Ausgabe des Edit-Scores
-	return editMatrix[lenA][lenB];
+	return max;
 }
 
 void *scoreCalculatorThread(void *arg){
@@ -162,21 +172,25 @@ void *scoreCalculatorThread(void *arg){
 	list_init(resultList);
 	job->results = resultList;
 	int verschiebungenA = strlen(stringA)-blocksize;
-
-	// printf("%s\n%s\n",stringA,stringB );
-	// Äußere Schleife geht StringA blockweise durch
+	char *subA,*subB;
 	int i;
+	int j;
+	int verschiebungenB;
+	struct Result *res;
+	struct GlobalResult *gresult;
+
+	// Äußere Schleife geht StringA blockweise durch
 	for (i = 0; i < verschiebungenA; ++i){
-		char *subA = malloc(blocksize);
+		subA = malloc(blocksize);
 		memcpy(subA, stringA+i,blocksize);
 		// Durchgehen des zweiten Strings
-		int j;
-		int verschiebungenB = lengthB - blocksize;
+		
+		verschiebungenB = lengthB - blocksize;
 		for (j = 0; j < verschiebungenB; ++j){
-			char *subB = malloc(blocksize);
+			subB = malloc(blocksize);
 			memcpy(subB, stringB+j,blocksize);
 			// Result Element für die Speicherung der Ergebnisse mit Koordinaten
-			struct Result *res = malloc(sizeof(struct Result));
+			res = malloc(sizeof(struct Result));
 			res->score= editDistanceDynamic(subA,subB);
 			res->startA= job->startCoordA + i;
 			res->startB= j;
@@ -184,9 +198,11 @@ void *scoreCalculatorThread(void *arg){
 				// printf("S1:|%s|\nS2:|%s|\n\n",subA,subB );
 				list_add(&(res->head),resultList);
 			}
+			free(subB);
 		}
+		free(subA);
 		if (list_empty(resultList) == 0){
-			struct GlobalResult *gresult = malloc(sizeof(struct GlobalResult));
+			gresult = malloc(sizeof(struct GlobalResult));
 			gresult->content = resultList;
 
 			pthread_mutex_lock(&lock);
@@ -200,9 +216,13 @@ void *scoreCalculatorThread(void *arg){
 		
 		}
 	}
+	free(job);
+	pthread_mutex_lock(&finishedlock);
+		finished[job->id]= 1;
+	pthread_mutex_unlock(&finishedlock);
 
 	pthread_mutex_lock(&lock);
-		finished[job->id]= 1;
+
 		pthread_cond_signal(&ergebnisseBereit);
 
 	pthread_mutex_unlock(&lock);
@@ -247,15 +267,19 @@ int main (int argc, char *argv[]){
 				workPerThread = lengthA/threadNumber;
 			}
 		}
+		
 		int rest = lengthA % threadNumber;
 		finished = malloc(sizeof(int)*threadNumber);
 		int i;
+		char *cutoutA;
+		char *cutoutB;
+		struct AlignJob *job;
+		int arbeitsbereich;
+
 		printf("--- Berechnung mit %i Threads startet ---\n",threadNumber );
 		for (i = 0; i < threadNumber; ++i){
-			char *cutoutA;
-			char *cutoutB;
-			struct AlignJob *job = malloc(sizeof(struct AlignJob));
-			int arbeitsbereich = workPerThread + BLOCKSIZE;
+			job = malloc(sizeof(struct AlignJob));
+			arbeitsbereich = workPerThread + BLOCKSIZE;
 			// Normale Aufteilung der Sequenz A für den Thread
 			cutoutA = malloc(arbeitsbereich);
 			memcpy( cutoutA, seqA+(i * workPerThread), arbeitsbereich);
@@ -280,9 +304,9 @@ int main (int argc, char *argv[]){
 			job->work = workPerThread;
 			job->startCoordA = i * workPerThread;
 			job->id = i;
-			pthread_mutex_lock(&lock);
+			pthread_mutex_lock(&finishedlock);
 			finished[i]=0; 
-			pthread_mutex_unlock(&lock);
+			pthread_mutex_unlock(&finishedlock);
 			pthread_create(&threads[i], NULL, scoreCalculatorThread, job);
 		}
 
@@ -294,9 +318,11 @@ int main (int argc, char *argv[]){
 
 			// Checken ob alle Threads fertig sind
 			sum = 0;
-			for (i = 0; i < threadNumber; ++i){
-				sum += finished[i];
-			}
+				pthread_mutex_lock(&finishedlock);
+					for (i = 0; i < threadNumber; ++i){
+						sum += finished[i];
+					}
+				pthread_mutex_unlock(&finishedlock);
 			// Ergebnisliste abarbeiten
 			while(list_empty(globalResults) == 0){
 				print_max_Element(globalResults);
