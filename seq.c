@@ -4,7 +4,7 @@
 #include <pthread.h>
 #include "dll.h"
 
-#define SCORE_LIMIT 50
+#define SCORE_LIMIT 70
 #define BLOCKSIZE 50
 
 pthread_mutex_t lock = PTHREAD_MUTEX_INITIALIZER;
@@ -14,7 +14,6 @@ struct list_head *globalResults;
 int *finished;
 
 struct AlignJob{
-	int work;
 	int startCoordA;
 	int lengthB;
 	int id;
@@ -154,12 +153,11 @@ char* importSequence(char *argv){
 				}
 
 			//Maximal Score für lokales Alignment suchen
-				if (editMatrix[i][j]>= max){
+				if (editMatrix[i][j] > max){
 					max = editMatrix[i][j]; 
 				}
 			}
 		}
-
 	// Ausgabe des Edit-Scores
 		return max;
 	}
@@ -173,26 +171,21 @@ char* importSequence(char *argv){
 		list_init(resultList);
 		job->results = resultList;
 		int verschiebungenA = strlen(stringA)-BLOCKSIZE;
-		char *subA,*subB;
-		int i;
-		int j;
-		int verschiebungenB;
+		int verschiebungenB = lengthB - BLOCKSIZE;
+		char *subA = malloc(BLOCKSIZE);
+		char *subB = malloc(BLOCKSIZE);
+		int i,j;
 		struct Result *res;
 		struct GlobalResult *gresult;
 
 	// Äußere Schleife geht StringA blockweise durch
 		for (i = 0; i < verschiebungenA; ++i){
-			subA = malloc(BLOCKSIZE);
 			memcpy(subA, stringA+i,BLOCKSIZE);
-		// Durchgehen des zweiten Strings
-
-			verschiebungenB = lengthB - BLOCKSIZE;
+			// Durchgehen des zweiten Strings
 			for (j = 0; j < verschiebungenB; ++j){
-				subB = malloc(BLOCKSIZE);
 				memcpy(subB, stringB+j,BLOCKSIZE);
-
 				int score = editDistanceDynamic(subA,subB);
-				if (score > 50){
+				if (score > SCORE_LIMIT){
 				// Result Element für die Speicherung der Ergebnisse mit Koordinaten
 					res = malloc(sizeof(struct Result));
 					res->score= score;
@@ -200,26 +193,23 @@ char* importSequence(char *argv){
 					res->startB= j;
 					list_add(&(res->head),resultList);
 				}
-				free(subB);
 			}
-			free(subA);
-		// Ergebnisliste ist nicht leer also Resultatliste an Mainthread weiterleiten
+			// Wenn Ergebnisliste nicht leer  Resultatliste an Mainthread weiterleiten
 			if (list_empty(resultList) == 0){
 				gresult = malloc(sizeof(struct GlobalResult));
 				gresult->content = resultList;
-
+				//An Globale Ergebnisliste anhängen
 				pthread_mutex_lock(&lock);
-
 				list_add((struct list_head *)gresult,globalResults);
 				pthread_cond_signal(&ergebnisseBereit);
-
 				pthread_mutex_unlock(&lock);
+				// Liste für nachfolgende Iterationen neu initalisieren
 				resultList = malloc(sizeof(struct list_head));	
 				list_init(resultList);
-
 			}
 		}
 		free(job);
+		
 		pthread_mutex_lock(&finishedlock);
 		finished[job->id]= 1;
 		pthread_mutex_unlock(&finishedlock);
@@ -227,12 +217,11 @@ char* importSequence(char *argv){
 		pthread_mutex_lock(&lock);
 		pthread_cond_signal(&ergebnisseBereit);
 		pthread_mutex_unlock(&lock);
-		// print_results(resultList);
 		return NULL;
 	}
 
 
-	int main (int argc, char *argv[]){
+int main (int argc, char *argv[]){
 		if (argv[1]==NULL || argv[2]==NULL){
 			printf("Keine Eingabesequenzen, Benutzung: Datei1 Datei2 Threadanzahl\n");
 			return -1;
@@ -254,8 +243,8 @@ char* importSequence(char *argv){
 	// Sequenzen Importieren
 		char *seqA = importSequence(argv[1]);
 		char *seqB = importSequence(argv[2]);
-	// char *seqA = "CCGTCCGTTAATTCCTCTTGCATTCATATCGCGTATTTTTGTCTCTTTACCCGCTTACTTGGATAAGGATGACATAGCTTCTTACCGGAGCGCCTCCGTAAAATTGC";
-	// char *seqB = "CTGGCAACCGGGAGGTGGGAATCCGTCACATATGAGAAGGTATTTGCCCGATAATCAATACTCCAGGCATCTAACTTTTCCCACTGCCTTAAGCCGGCTT";
+		// char *seqA = "CCGTCCGTTAATTCCTCTTGCATTCATATCGCGTATTTTTGTCTCTTTACCCGCTTACTTGGATAAGGATGACATAGCTTCTTACCGGAGCGCCTCCGTAAAATTGC";
+		// char *seqB = "CTGGCAACCGGGAGGTGGGAATCCGTCACATATGAGAAGGTATTTGCCCGATAATCAATACTCCAGGCATCTAACTTTTCCCACTGCCTTAAGCCGGCTT";
 		int lengthA = strlen(seqA);
 		int lengthB = strlen(seqB);
 
@@ -279,29 +268,29 @@ char* importSequence(char *argv){
 
 			printf("--- Berechnung mit %i Threads startet ---\n",threadNumber );
 			for (i = 0; i < threadNumber; ++i){
-				job = malloc(sizeof(struct AlignJob));
-				arbeitsbereich = workPerThread + BLOCKSIZE;
-			// Normale Aufteilung der Sequenz A für den Thread
-				cutoutA = malloc(arbeitsbereich);
-				memcpy( cutoutA, seqA+(i * workPerThread), arbeitsbereich);
-
+				// Sonderfall für den letzten Thread
 				if (i == threadNumber-1){
 					arbeitsbereich = workPerThread;
 					if (rest > 0){
 						cutoutA = malloc(arbeitsbereich + rest);
 						memcpy( cutoutA, seqA+(i * workPerThread), arbeitsbereich + rest);
 					}
+				} else {
+				// Normale Aufteilung der Sequenz A für den Thread
+				arbeitsbereich = workPerThread + BLOCKSIZE;
+				cutoutA = malloc(arbeitsbereich);
+				memcpy( cutoutA, seqA+(i * workPerThread), arbeitsbereich);
 				}
-			// printf("%i %i %i %i\n",workPerThread, threadNumber,rest, arbeitsbereich );
+
 			// Ausschnitt der Sequenz B
 				cutoutB = malloc(lengthB+1);
 				memcpy( cutoutB, seqB,lengthB);
 
 			// Job erstellen
+				job = malloc(sizeof(struct AlignJob));
 				job->sequence1 = cutoutA;
 				job->sequence2 = cutoutB;
 				job->lengthB = lengthB;
-				job->work = workPerThread;
 				job->startCoordA = i * workPerThread;
 				job->id = i;
 				pthread_mutex_lock(&finishedlock);
@@ -310,24 +299,24 @@ char* importSequence(char *argv){
 				pthread_create(&threads[i], NULL, scoreCalculatorThread, job);
 			}
 
-		// Verarbeitungsblock
+			// Verarbeitungsblock
 			pthread_mutex_lock(&lock);
 			int sum =0;
 			while(list_empty(globalResults)){
 				pthread_cond_wait(&ergebnisseBereit,&lock);
 
-			// Checken ob alle Threads fertig sind
+				// Checken ob alle Threads fertig sind
 				sum = 0;
 				pthread_mutex_lock(&finishedlock);
 				for (i = 0; i < threadNumber; ++i){
 					sum += finished[i];
 				}
 				pthread_mutex_unlock(&finishedlock);
-			// Ergebnisliste abarbeiten
+				// Ergebnisliste abarbeiten
 				while(list_empty(globalResults) == 0){
 					print_max_Element(globalResults);
 				}
-			// Schleife verlassen wenn alles erledigt wurde
+				// Schleife verlassen wenn alles erledigt wurde
 				if (sum == threadNumber){
 					break;	
 				}
@@ -343,4 +332,4 @@ char* importSequence(char *argv){
 			printf("Die erste Sequenz muss die Längere sein!\n" );
 		}
 		return 0;
-	}
+}
